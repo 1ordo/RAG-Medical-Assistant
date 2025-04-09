@@ -1,0 +1,7 @@
+streamlit
+pandas
+scikit-learn
+google-generativeai
+rapidfuzz
+asyncio
+python-dotenv

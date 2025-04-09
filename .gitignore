@@ -1,0 +1,40 @@
+# Environment variables
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+notebook.ipynb
+
+# Chat history
+chat.json
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS specific files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+tests
+data/Hospital_Inpatient_Discharges.csv
