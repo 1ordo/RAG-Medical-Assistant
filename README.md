@@ -97,7 +97,7 @@ The system uses a hospital inpatient discharge dataset that contains information
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## Contributing
 
