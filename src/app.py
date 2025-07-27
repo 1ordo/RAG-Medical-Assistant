@@ -2,7 +2,7 @@
 Medical Assistant AI - Streamlit Interface
 
 This module provides a Streamlit web interface for the Medical Assistant AI,
-allowing users to interact with the clustering-based medical analysis system.
+allowing users to interact with Ollama Llama 3.2 for medical assistance and clustering-based analysis.
 """
 
 import streamlit as st
@@ -72,7 +72,19 @@ def setup_ui():
         """, unsafe_allow_html=True)
     
     st.title("🏥 Medical Assistant AI")
-    st.markdown("### Powered by Advanced Medical Clustering Analysis")
+    st.markdown("### Powered by Ollama Llama 3.2 & Advanced Medical Clustering")
+    st.markdown("Ask me about your symptoms, get medical insights, or analyze patient data!")
+    
+    # Add example queries
+    with st.expander("💡 Example Questions"):
+        st.markdown("""
+        - "I have a persistent cough, fever of 101°F, and fatigue for the past 3 days. What could this be?"
+        - "What should I do for a severe headache with sensitivity to light?"
+        - "I'm experiencing chest pain and shortness of breath. Is this serious?"
+        - "Can you analyze patient John Doe diagnosed with pneumonia?" (for clustering analysis)
+        """)
+    
+    st.markdown("---")
 
 
 async def process_user_input(prompt):
@@ -121,8 +133,9 @@ def display_sidebar():
             st.markdown("---")
         
         st.info(
-            "ℹ️ All recommendations are based on statistical analysis of patient clusters "
-            "and should be verified by a licensed medical professional."
+            "ℹ️ This AI provides general medical information and patient cluster analysis. "
+            "Always consult with licensed healthcare professionals for medical decisions. "
+            "For emergencies, call your local emergency services immediately."
         )
 
 
@@ -133,8 +146,13 @@ def main():
     setup_ui()
     display_sidebar()
     
+    # Display chat history
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+    
     # Process user input
-    if prompt := st.chat_input("How can I assist you with patient care today?"):
+    if prompt := st.chat_input("Describe your symptoms or ask about patient care..."):
         asyncio.run(process_user_input(prompt))
 
 
