@@ -1,7 +1,8 @@
 streamlit
 pandas
 scikit-learn
-google-generativeai
+ollama
 rapidfuzz
 asyncio
 python-dotenv
+requests
