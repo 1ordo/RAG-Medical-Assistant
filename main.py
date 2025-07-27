@@ -3,7 +3,8 @@
 Medical Assistant AI - Main Entry Point
 
 This script serves as the main entry point for the Medical Assistant AI application.
-It simply launches the Streamlit interface defined in src/app.py
+It launches the Streamlit interface defined in src/app.py which uses Ollama Llama 3.2
+for medical assistance and patient data analysis.
 """
 
 import os
@@ -13,11 +14,14 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
 if __name__ == "__main__":
-    # Check for API key
-    if not os.environ.get('GOOGLE_API_KEY'):
-        print("Warning: GOOGLE_API_KEY environment variable is not set.")
-        print("Please set it before running the application:")
-        print("  export GOOGLE_API_KEY='your-api-key-here'")
+    # Check for Ollama
+    print("Medical Assistant AI - Powered by Ollama Llama 3.2")
+    print("=" * 50)
+    print("Before running, please ensure:")
+    print("1. Ollama is installed and running")
+    print("2. Llama 3.2 model is installed: ollama pull llama3.2")
+    print("3. Ollama server is accessible at http://localhost:11434")
+    print()
     
     # Run the Streamlit app using subprocess instead of direct import
     # This avoids potential API changes in streamlit.web.cli
