@@ -1,39 +1,16 @@
-"""
-AI Functions for Medical Assistant AI
-
-This module provides the main AI functionality for the Medical Assistant application,
-handling the integration with Ollama Llama 3.2 model and processing function calls.
-"""
-
 import asyncio
 import json
 import logging
 import os
 import requests
 from typing import Dict, Any, Tuple, Optional
-from clustering import get_patient_state
+from clustering import get_patient_state, load_data, preprocess_data, find_closest_diagnosis
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Ollama configuration
 OLLAMA_BASE_URL = os.environ.get('OLLAMA_BASE_URL', 'http://localhost:11434')
 OLLAMA_MODEL = os.environ.get('OLLAMA_MODEL', 'llama3.2')
-
-# Define function schemas
-FUNCTIONS = [{
-    "name": "get_patient_state",
-    "description": "Search the clusters for patient data, and return the state of the patient",
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "name": {"type": "string", "description": "name of the patient"},
-            "diagnosed_with": {"type": "string", "description": "diagnosis of the patient"}
-        },
-        "required": ["name", "diagnosed_with"]
-    }
-}]
 
 # System prompt for the AI
 SYSTEM_PROMPT = """
@@ -46,7 +23,18 @@ When helping users with their health concerns:
 4. Provide general health advice and self-care recommendations
 5. Always remind users that your advice does not replace professional medical consultation
 6. Be empathetic and supportive while maintaining medical professionalism
-7. If provided with patient data (name and diagnosis), use the clustering analysis tools to provide detailed insights
+
+IMPORTANT: The get_patient_state function should ONLY be used when:
+- The user explicitly provides a SPECIFIC PATIENT NAME (like "John Doe", "Patient Smith")
+- AND mentions a CONFIRMED DIAGNOSIS (like "diagnosed with pneumonia", "has been diagnosed with diabetes")
+- Example: "Can you analyze patient John Doe who was diagnosed with pneumonia?"
+
+DO NOT use this function for:
+- General symptom descriptions ("I have a cough and fever")
+- Questions asking "What could this be?"
+- Symptom analysis without a specific patient name and confirmed diagnosis
+
+For symptom descriptions without a patient name and confirmed diagnosis, provide general medical advice, possible conditions to consider, and recommend consulting a healthcare professional.
 
 Important disclaimers to remember:
 - Always advise users to consult with healthcare professionals for serious symptoms
@@ -56,50 +44,31 @@ Important disclaimers to remember:
 
 Current user query: """
 
-
-
 async def call_ollama(messages: list, use_tools: bool = False) -> dict:
-    """
-    Call Ollama API with the given messages.
-    
-    Args:
-        messages: List of conversation messages
-        use_tools: Whether to include function calling tools
-        
-    Returns:
-        dict: Response from Ollama API
-    """
     url = f"{OLLAMA_BASE_URL}/api/chat"
-    
     payload = {
         "model": OLLAMA_MODEL,
         "messages": messages,
         "stream": False,
-        "options": {
-            "temperature": 0.7,
-            "top_p": 0.9
-        }
+        "options": {"temperature": 0.7, "top_p": 0.9}
     }
-    
     if use_tools:
-        payload["tools"] = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_patient_state",
-                    "description": "Search the clusters for patient data, and return the state of the patient",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "name": {"type": "string", "description": "name of the patient"},
-                            "diagnosed_with": {"type": "string", "description": "diagnosis of the patient"}
-                        },
-                        "required": ["name", "diagnosed_with"]
-                    }
+        payload["tools"] = [{
+            "type": "function",
+            "function": {
+                "name": "get_patient_state",
+                "description": "Analyze a specific named patient with a confirmed diagnosis",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "description": "Patient's full name (required)"},
+                        "diagnosed_with": {"type": "string", "description": "Confirmed medical diagnosis (not symptoms)"}
+                    },
+                    "required": ["name", "diagnosed_with"]
                 }
             }
-        ]
-    
+        }]
+
     try:
         response = requests.post(url, json=payload, timeout=60)
         response.raise_for_status()
@@ -108,187 +77,115 @@ async def call_ollama(messages: list, use_tools: bool = False) -> dict:
         logger.error(f"Error calling Ollama API: {str(e)}")
         raise
 
-
 async def ai_function(message: str) -> Tuple[str, Optional[str]]:
-    """
-    Process a user message and generate a response using Ollama Llama 3.2.
-    
-    Args:
-        message: The user's input message
-        
-    Returns:
-        tuple: (response text, function call name if applicable)
-    """
     function_call = None
-    
     try:
-        # Check if Ollama is running
         try:
             health_response = requests.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=5)
             health_response.raise_for_status()
         except requests.exceptions.RequestException:
-            return "Ollama server is not running. Please start Ollama and ensure the llama3.2 model is installed.", None
-        
-        # Get chat history
+            return "Ollama server not running. Please start Ollama.", None
+
         result = get_chat_json()
-        
-        # Prepare messages for Ollama
         messages = []
-        
         if result:
             try:
                 history_json = result[0]
                 history = json.loads(history_json)
-                # Convert history to Ollama format
                 for entry in history:
-                    if entry.get('role') == 'user':
-                        messages.append({"role": "user", "content": entry['parts'][0]})
-                    elif entry.get('role') == 'model':
-                        messages.append({"role": "assistant", "content": entry['parts'][0]})
+                    role, content = entry.get('role'), entry['parts'][0]
+                    if role in ('user', 'model'):
+                        messages.append({"role": role if role == 'user' else 'assistant', "content": content})
             except (json.JSONDecodeError, KeyError, IndexError):
                 messages = []
-        
-        # Add system prompt and current message
+
         system_message = {"role": "system", "content": SYSTEM_PROMPT}
         user_message = {"role": "user", "content": message}
-        
-        if not messages:
-            messages = [system_message, user_message]
-        else:
-            messages.append(user_message)
-        
-        # Check if this looks like a patient inquiry that needs function calling
-        patient_keywords = ["patient", "name", "diagnosed", "condition", "medical record", "cluster analysis"]
-        needs_function_call = any(keyword.lower() in message.lower() for keyword in patient_keywords)
-        
-        # Try function calling first if it seems appropriate
+
+        messages = [system_message] + messages + [user_message] if not messages else messages + [user_message]
+
+        # Only trigger function call if the message clearly indicates a specific patient with a confirmed diagnosis
+        # Look for patterns like "patient [name] diagnosed with" or "analyze [name] with [diagnosis]"
+        message_lower = message.lower()
+        has_patient_name = any(keyword in message_lower for keyword in ["patient ", "analyze ", "john", "jane", "smith", "doe"])
+        has_diagnosis_keywords = any(keyword in message_lower for keyword in ["diagnosed with", "diagnosis of", "confirmed", "has been diagnosed"])
+        needs_function_call = has_patient_name and has_diagnosis_keywords
+
         if needs_function_call:
             try:
                 response = await call_ollama(messages, use_tools=True)
-                
-                # Check if function call was made
                 if "message" in response and "tool_calls" in response["message"]:
-                    tool_calls = response["message"]["tool_calls"]
-                    if tool_calls and len(tool_calls) > 0:
-                        tool_call = tool_calls[0]
-                        if tool_call["function"]["name"] == "get_patient_state":
-                            function_call = "get_patient_state"
-                            args = json.loads(tool_call["function"]["arguments"])
-                            name = args.get("name", "")
-                            diagnosed_with = args.get("diagnosed_with", "")
-                            
-                            # Call the function
-                            search_results = get_patient_state(name, diagnosed_with)
-                            name, diagnosed_with, severity, estimated_cost, apr_mdc, priority = search_results
-                            
-                            diag_result = f"Patient: {name}\nDiagnosed with: {diagnosed_with}\nSeverity: {severity}\nEstimated Cost: {estimated_cost}\nAPR MDC Description: {apr_mdc}\nPriority: {priority}"
-                            
-                            # Generate final response with function results
-                            context_message = {"role": "user", "content": f"Based on this patient analysis data: {diag_result}\n\nOriginal question: {message}"}
-                            final_messages = messages + [context_message]
-                            
-                            final_response = await call_ollama(final_messages, use_tools=False)
-                            answer = final_response["message"]["content"]
-                            
-                            # Save to chat history
-                            history = []
-                            for msg in final_messages:
-                                if msg["role"] == "user":
-                                    history.append({"role": "user", "parts": [msg["content"]]})
-                                elif msg["role"] == "assistant":
-                                    history.append({"role": "model", "parts": [msg["content"]]})
-                            
-                            history.append({"role": "model", "parts": [answer]})
-                            await asyncio.to_thread(save_all_chat_json, [json.dumps(history)])
-                            
-                            return answer, function_call
+                    tool_call = response["message"]["tool_calls"][0]
+                    if tool_call["function"]["name"] == "get_patient_state":
+                        function_call = "get_patient_state"
+                        args = tool_call["function"]["arguments"]
+                        args = json.loads(args) if isinstance(args, str) else args
+
+                        name = args.get("name", "")
+                        diagnosed_with = args.get("diagnosed_with", "")
+
+                        result = get_patient_state(name, diagnosed_with)
+                        patient_name, diagnosis, severity, estimated_cost, apr_mdc, priority = result
+
+                        answer = f"""**Medical Analysis Results for {patient_name or 'Patient'}**\n\n**Diagnosis:** {diagnosis}\n**Severity Level:** {severity}\n**Estimated Treatment Cost:** ${estimated_cost:,.2f}\n**Medical Category (APR MDC):** {apr_mdc}\n**Priority Level:** {priority}\n\n**Recommendations:**\n- Based on clustering, this condition is **{severity.lower()}** severity\n- The patient should be given **{priority.lower()}**\n- Estimated cost: **${estimated_cost:,.2f}**\n\n**Important:** Always consult professionals for medical decisions."""
+
+                        history = [*messages, {"role": "assistant", "content": answer}]
+                        formatted = [{"role": m["role"] if m["role"] == "user" else "model", "parts": [m["content"]]} for m in history]
+                        await asyncio.to_thread(save_all_chat_json, [json.dumps(formatted)])
+                        return answer, function_call
             except Exception as e:
-                logger.warning(f"Function calling failed, falling back to regular chat: {str(e)}")
-        
-        # Regular chat without function calling
+                logger.warning(f"Function call fallback: {e}")
+
+        # Fallback to general suggestion based on symptoms
         response = await call_ollama(messages, use_tools=False)
         answer = response["message"]["content"]
-        
-        # Save to chat history
-        history = []
-        for msg in messages:
-            if msg["role"] == "user":
-                history.append({"role": "user", "parts": [msg["content"]]})
-            elif msg["role"] == "assistant":
-                history.append({"role": "model", "parts": [msg["content"]]})
-        
-        history.append({"role": "model", "parts": [answer]})
-        await asyncio.to_thread(save_all_chat_json, [json.dumps(history)])
-        
+
+        # For symptom descriptions, provide additional context but don't call get_patient_state
+        try:
+            input_symptoms = message.lower()
+            df, _ = preprocess_data(load_data())
+            diagnoses = df['CCS Diagnosis Description'].dropna().unique()
+            # Filter out obviously pediatric diagnoses
+            filtered_diagnoses = [d for d in diagnoses if not any(x in d.lower() for x in ['newborn', 'neonate', 'perinatal'])]
+            matched_diag = find_closest_diagnosis(input_symptoms, filtered_diagnoses)
+
+            if matched_diag and isinstance(matched_diag, str) and matched_diag.strip():
+                if not any(x in matched_diag.lower() for x in ['newborn', 'neonate', 'perinatal']):
+                    # Just provide the possible condition without detailed analysis
+                    answer += f"\n\n💡 *Based on your symptoms, this could potentially be related to:* **{matched_diag}**"
+                    answer += f"\n⚠️ *This is just a data-based suggestion. Please consult a healthcare professional for proper diagnosis and treatment.*"
+                else:
+                    logger.info(f"Matched diagnosis '{matched_diag}' filtered out due to neonatal keyword.")
+            else:
+                logger.info("No confident diagnosis match found in the database.")
+        except Exception as e:
+            logger.warning(f"Symptom match error: {e}")
+
+        history = [*messages, {"role": "assistant", "content": answer}]
+        formatted = [{"role": m["role"] if m["role"] == "user" else "model", "parts": [m["content"]]} for m in history]
+        await asyncio.to_thread(save_all_chat_json, [json.dumps(formatted)])
+
         return answer, function_call
-        
     except Exception as e:
-        logger.error(f"Error in AI function: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return "I'm having trouble connecting to the AI model. Please make sure Ollama is running and the llama3.2 model is installed.", None
+        logger.error(f"AI Error: {e}")
+        return "There was an error processing your request.", None
 
-
-async def generate_chat_response(messages):
-    """Generate a chat response using Ollama"""
-    try:
-        response = await call_ollama(messages, use_tools=False)
-        answer = response["message"]["content"]
-        
-        # Convert messages to history format
-        history = []
-        for msg in messages:
-            if msg["role"] == "user":
-                history.append({"role": "user", "parts": [msg["content"]]})
-            elif msg["role"] == "assistant":
-                history.append({"role": "model", "parts": [msg["content"]]})
-        
-        history.append({"role": "model", "parts": [answer]})
-        return answer, history
-        
-    except asyncio.TimeoutError:
-        return "API response timed out. Maybe you're asking for a really long answer?", []
-    except Exception as e:
-        logger.error(f"Error generating chat response: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return "Something went wrong. This feature is still in Beta.", []
-
-
-# Chat history functions
+# Chat History Helpers
 
 def get_chat_json():
-    """Load chat history from the chat.json file"""
     try:
         with open('chat.json') as f:
-            try:
-                chat = json.load(f)
-                return chat
-            except json.JSONDecodeError:
-                return []
-    except FileNotFoundError:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
         create_chat_json([])
         return []
 
-
 def create_chat_json(chat):
-    """Create or overwrite the chat.json file"""
     with open('chat.json', 'w') as f:
         json.dump(chat, f, indent=4)
 
-
-def append_message_to_chat_json(message):
-    """Append a message to the chat history"""
-    chat = get_chat_json()
-    chat.append(message)
-    create_chat_json(chat)
-    
-
 def save_all_chat_json(messages):
-    """Save all messages to the chat history"""
     create_chat_json(messages)
 
-
 def clear_all_chat_json():
-    """Clear the chat history"""
     create_chat_json([])
