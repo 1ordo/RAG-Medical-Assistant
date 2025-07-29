@@ -19,15 +19,15 @@ logger = logging.getLogger(__name__)
 # Define available functions for the AI
 AVAILABLE_FUNCTIONS = {
     "get_patient_state": {
-        "description": "Analyze patient data using medical clustering algorithms to determine condition severity and recommended treatments.",
+        "description": "Analyze a specific named patient with a confirmed diagnosis using medical clustering algorithms. Only used when both patient name and confirmed diagnosis are provided.",
         "parameters": {
             "name": {
                 "type": "string",
-                "description": "Patient's full name"
+                "description": "Patient's full name (required)"
             },
             "diagnosed_with": {
                 "type": "string",
-                "description": "Primary diagnosis or symptoms"
+                "description": "Confirmed medical diagnosis (not symptoms)"
             }
         }
     }
@@ -78,10 +78,14 @@ def setup_ui():
     # Add example queries
     with st.expander("💡 Example Questions"):
         st.markdown("""
+        **For Symptom Assessment:**
         - "I have a persistent cough, fever of 101°F, and fatigue for the past 3 days. What could this be?"
         - "What should I do for a severe headache with sensitivity to light?"
         - "I'm experiencing chest pain and shortness of breath. Is this serious?"
-        - "Can you analyze patient John Doe diagnosed with pneumonia?" (for clustering analysis)
+        
+        **For Patient Analysis (requires name + confirmed diagnosis):**
+        - "Can you analyze patient John Doe diagnosed with pneumonia?"
+        - "Please evaluate patient Mary Smith who has been diagnosed with diabetes mellitus"
         """)
     
     st.markdown("---")
