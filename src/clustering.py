@@ -28,7 +28,8 @@ def load_data(file_path="data/Hospital_Inpatient_Discharges.csv"):
         pandas.DataFrame: The loaded data
     """
     try:
-        return pd.read_csv(file_path)
+        # Load with low_memory=False to handle mixed types and specify dtype for problematic columns
+        return pd.read_csv(file_path, low_memory=False, dtype={'Total Costs': 'str'})
     except Exception as e:
         logger.error(f"Error loading data: {str(e)}")
         raise
@@ -44,16 +45,28 @@ def preprocess_data(df):
     Returns:
         tuple: (preprocessed DataFrame, diagnosis encoder)
     """
+    # Create a copy to avoid SettingWithCopyWarning
+    df = df.copy()
+    
     # Drop rows with missing critical values
     df = df.dropna(subset=['CCS Diagnosis Description', 'APR Severity of Illness Description', 'APR MDC Description','Total Costs'])
 
     # Map severity descriptions to numeric values
     severity_mapping = {'Minor': 1, 'Moderate': 2, 'Major': 3}
-    df['severity_encoded'] = df['APR Severity of Illness Description'].map(severity_mapping)
-    df['Total Costs'] = df['Total Costs'].str.replace(',', '').astype(float)
+    df.loc[:, 'severity_encoded'] = df['APR Severity of Illness Description'].map(severity_mapping)
     
-    # Drop rows where severity couldn't be mapped
-    df = df.dropna(subset=['severity_encoded'])
+    # Handle Total Costs - convert to string first if not already, then clean and convert to float
+    if df['Total Costs'].dtype != 'object':
+        df.loc[:, 'Total Costs'] = df['Total Costs'].astype(str)
+    
+    # Clean and convert Total Costs
+    df.loc[:, 'Total Costs'] = df['Total Costs'].str.replace(',', '').str.replace('$', '').str.strip()
+    
+    # Convert to numeric, handling any non-numeric values
+    df.loc[:, 'Total Costs'] = pd.to_numeric(df['Total Costs'], errors='coerce')
+    
+    # Drop rows where severity couldn't be mapped or costs couldn't be converted
+    df = df.dropna(subset=['severity_encoded', 'Total Costs'])
 
     # Find the most common severity for each diagnosis
     most_common_severity = df.groupby('CCS Diagnosis Description')['APR Severity of Illness Description'].agg(
@@ -68,7 +81,7 @@ def preprocess_data(df):
 
     # Encode the diagnosis descriptions
     diagnosis_encoder = LabelEncoder()
-    df['diagnosis_encoded'] = diagnosis_encoder.fit_transform(df['CCS Diagnosis Description'])
+    df.loc[:, 'diagnosis_encoded'] = diagnosis_encoder.fit_transform(df['CCS Diagnosis Description'])
 
     return df, diagnosis_encoder
 
@@ -84,11 +97,20 @@ def find_closest_diagnosis(input_diagnosis, diagnosis_list):
     Returns:
         str or None: The closest matching diagnosis if similarity score is above threshold
     """
+    if not input_diagnosis or not diagnosis_list:
+        return None
+        
     input_diagnosis = input_diagnosis.strip().lower()
-    match = process.extractOne(input_diagnosis, diagnosis_list)
+    # Convert diagnosis_list to lowercase for better matching
+    diagnosis_list_lower = [diag.lower() for diag in diagnosis_list]
+    
+    match = process.extractOne(input_diagnosis, diagnosis_list_lower)
     if match:
-        diagnosis_match, score, _ = match
-        return diagnosis_match if score >= 75 else None  # Use a threshold of 75 for similarity
+        diagnosis_match, score, index = match
+        logger.info(f"Fuzzy match found: '{diagnosis_match}' with score {score}")
+        if score >= 70:  # Lower threshold for better matching
+            # Return the original case diagnosis
+            return diagnosis_list[diagnosis_list_lower.index(diagnosis_match)]
     return None
 
 
@@ -123,47 +145,78 @@ def predict_priority(kmeans, diagnosis_encoder, df, diagnosis):
     Returns:
         tuple: (severity, priority, estimated_cost, apr_mdc)
     """
-    # Encode the input diagnosis
+    # Add cluster labels to the dataframe if not already present
+    if 'cluster' not in df.columns:
+        df['cluster'] = kmeans.labels_
+    
+    # Try to find exact match first, then fuzzy match
+    matched_diagnosis = diagnosis
+    if diagnosis not in diagnosis_encoder.classes_:
+        # Try fuzzy matching
+        available_diagnoses = list(diagnosis_encoder.classes_)
+        matched_diagnosis = find_closest_diagnosis(diagnosis, available_diagnoses)
+        
+        if matched_diagnosis:
+            logger.info(f"Using fuzzy matched diagnosis: '{matched_diagnosis}' for input: '{diagnosis}'")
+        else:
+            logger.warning(f"No suitable match found for diagnosis: '{diagnosis}'. Using most common diagnosis.")
+            # Use the most common diagnosis as fallback
+            most_common_diagnosis = df['CCS Diagnosis Description'].mode()[0]
+            matched_diagnosis = most_common_diagnosis
+    
+    # Encode the matched diagnosis
     try:
-        diagnosis_encoded = diagnosis_encoder.transform([diagnosis])[0]
+        diagnosis_encoded = diagnosis_encoder.transform([matched_diagnosis])[0]
     except ValueError:
-        logger.warning(f"Diagnosis '{diagnosis}' not found in the dataset. Using default cluster.")
-        diagnosis_encoded = 0  # Default to the first cluster if diagnosis not found
+        logger.error(f"Failed to encode diagnosis: '{matched_diagnosis}'. Using default.")
+        diagnosis_encoded = 0
 
-    # Prepare data for prediction (use default severity of Moderate if missing)
-    severity_encoded = 2  # Moderate by default
+    # Get the most common severity for this diagnosis from the dataset
+    diagnosis_data = df[df['CCS Diagnosis Description'] == matched_diagnosis]
+    if not diagnosis_data.empty:
+        # Use the actual severity from the dataset
+        severity_encoded = diagnosis_data['severity_encoded'].mode()[0]
+        # Get APR MDC Description
+        apr_mdc = diagnosis_data['APR MDC Description'].iloc[0]
+    else:
+        # Default values if diagnosis not found
+        severity_encoded = 2  # Moderate
+        apr_mdc = 'Unknown'
+
+    # Prepare data for prediction
     user_data = pd.DataFrame({'diagnosis_encoded': [diagnosis_encoded], 'severity_encoded': [severity_encoded]})
-    df['cluster'] = kmeans.labels_
     
     # Predict the cluster
     cluster = kmeans.predict(user_data)[0]
     
     # Calculate estimated cost based on cluster
     cluster_costs = df.groupby('cluster')['Total Costs'].mean()
-    estimated_cost = cluster_costs[cluster] if cluster in cluster_costs.index else 0.0
+    estimated_cost = cluster_costs[cluster] if cluster in cluster_costs.index else df['Total Costs'].mean()
 
-    # Get the APR MDC Description for the diagnosis
-    apr_mdc = df[df['CCS Diagnosis Description'] == diagnosis]['APR MDC Description'].iloc[0] if diagnosis in df['CCS Diagnosis Description'].values else 'Unknown'
-
-    # Analyze the clusters in the dataset to assign severity and priority dynamically
+    # Analyze the clusters to assign severity and priority dynamically
     cluster_severity = df.groupby('cluster')['severity_encoded'].mean()
-
-    # Map clusters to severity (Minor, Moderate, Major) based on their average severity
-    cluster_severity_sorted = cluster_severity.sort_values()
-    cluster_to_severity = {
-        cluster_severity_sorted.index[0]: 'Minor',
-        cluster_severity_sorted.index[1]: 'Moderate',
-        cluster_severity_sorted.index[2]: 'Major'
-    }
+    
+    # Ensure we have enough clusters
+    if len(cluster_severity) >= 3:
+        cluster_severity_sorted = cluster_severity.sort_values()
+        cluster_to_severity = {
+            cluster_severity_sorted.index[0]: 'Minor',
+            cluster_severity_sorted.index[1]: 'Moderate',
+            cluster_severity_sorted.index[2]: 'Major'
+        }
+    else:
+        # Fallback mapping for fewer clusters
+        severity_map = {0: 'Minor', 1: 'Moderate', 2: 'Major'}
+        cluster_to_severity = {i: severity_map.get(i, 'Moderate') for i in range(len(cluster_severity))}
 
     # Map severity to priority
     severity_to_priority = {'Minor': 'Low Priority', 'Moderate': 'Medium Priority', 'Major': 'High Priority'}
     
     # Get severity and priority for the current cluster
-    severity = cluster_to_severity.get(cluster, 'Moderate')  # Default to Moderate if cluster not found
-    priority = severity_to_priority.get(severity, 'Medium Priority')  # Default to Medium if severity not found
+    predicted_severity = cluster_to_severity.get(cluster, 'Moderate')
+    priority = severity_to_priority.get(predicted_severity, 'Medium Priority')
 
-    return severity, priority, estimated_cost, apr_mdc
+    return predicted_severity, priority, estimated_cost, apr_mdc
 
 
 def get_patient_state(name, diagnosed_with):
