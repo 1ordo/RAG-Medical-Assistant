@@ -36,11 +36,19 @@ DO NOT use this function for:
 
 For symptom descriptions without a patient name and confirmed diagnosis, provide general medical advice, possible conditions to consider, and recommend consulting a healthcare professional.
 
+When users describe respiratory symptoms (fever, cough, sore throat, loss of smell/taste), consider:
+- COVID-19 and other viral respiratory infections
+- Influenza
+- Upper respiratory tract infections
+- Bronchitis or pneumonia
+- Always recommend testing for COVID-19 if symptoms are consistent
+
 Important disclaimers to remember:
 - Always advise users to consult with healthcare professionals for serious symptoms
 - Never provide specific medication dosages or prescriptions
 - Encourage immediate medical attention for severe symptoms like chest pain, difficulty breathing, severe injuries, etc.
 - Be clear that you are an AI assistant and not a replacement for professional medical care
+- For respiratory symptoms with fever, recommend COVID-19 testing and isolation until ruled out
 
 Current user query: """
 
@@ -151,13 +159,26 @@ async def ai_function(message: str) -> Tuple[str, Optional[str]]:
 
             if matched_diag and isinstance(matched_diag, str) and matched_diag.strip():
                 if not any(x in matched_diag.lower() for x in ['newborn', 'neonate', 'perinatal']):
-                    # Just provide the possible condition without detailed analysis
+                    # Add specific COVID-19 note if symptoms suggest it
+                    covid_symptoms = ['loss of smell', 'loss of taste', 'fever', 'cough', 'tired', 'fatigue']
+                    has_covid_symptoms = sum(1 for symptom in covid_symptoms if symptom in input_symptoms)
+                    
                     answer += f"\n\n💡 *Based on your symptoms, this could potentially be related to:* **{matched_diag}**"
+                    
+                    if has_covid_symptoms >= 3:
+                        answer += f"\n🦠 *Note: Your combination of symptoms (especially loss of smell/taste with fever and fatigue) could also suggest COVID-19 or other viral respiratory infections. Consider getting tested.*"
+                    
                     answer += f"\n⚠️ *This is just a data-based suggestion. Please consult a healthcare professional for proper diagnosis and treatment.*"
                 else:
                     logger.info(f"Matched diagnosis '{matched_diag}' filtered out due to neonatal keyword.")
             else:
-                logger.info("No confident diagnosis match found in the database.")
+                # If no match found, provide general guidance for respiratory symptoms
+                respiratory_keywords = ['cough', 'fever', 'throat', 'smell', 'taste', 'breathing', 'chest']
+                if any(keyword in input_symptoms for keyword in respiratory_keywords):
+                    answer += f"\n\n💡 *Your symptoms suggest a possible respiratory infection. Given the combination of fever, cough, sore throat, and loss of smell, consider getting evaluated for viral infections including COVID-19.*"
+                    answer += f"\n⚠️ *Please consult a healthcare professional for proper diagnosis and testing.*"
+                else:
+                    logger.info("No confident diagnosis match found in the database.")
         except Exception as e:
             logger.warning(f"Symptom match error: {e}")
 

@@ -88,10 +88,10 @@ def preprocess_data(df):
 
 def find_closest_diagnosis(input_diagnosis, diagnosis_list):
     """
-    Find the closest matching diagnosis using fuzzy string matching.
+    Find the closest matching diagnosis using improved fuzzy string matching and keyword analysis.
     
     Args:
-        input_diagnosis: User input diagnosis text
+        input_diagnosis: User input diagnosis text or symptoms
         diagnosis_list: List of valid diagnoses
         
     Returns:
@@ -101,16 +101,78 @@ def find_closest_diagnosis(input_diagnosis, diagnosis_list):
         return None
         
     input_diagnosis = input_diagnosis.strip().lower()
-    # Convert diagnosis_list to lowercase for better matching
-    diagnosis_list_lower = [diag.lower() for diag in diagnosis_list]
     
-    match = process.extractOne(input_diagnosis, diagnosis_list_lower)
-    if match:
-        diagnosis_match, score, index = match
-        logger.info(f"Fuzzy match found: '{diagnosis_match}' with score {score}")
-        if score >= 70:  # Lower threshold for better matching
-            # Return the original case diagnosis
-            return diagnosis_list[diagnosis_list_lower.index(diagnosis_match)]
+    # Define symptom-to-diagnosis keyword mappings for better matching
+    symptom_keywords = {
+        'respiratory': ['cough', 'fever', 'throat', 'sore throat', 'respiratory', 'breathing', 'shortness of breath', 'chest'],
+        'viral': ['fever', 'tired', 'fatigue', 'ache', 'loss of smell', 'loss of taste'],
+        'infection': ['fever', 'sore throat', 'swollen', 'pain'],
+        'pneumonia': ['cough', 'fever', 'chest pain', 'breathing', 'shortness'],
+        'bronchitis': ['cough', 'chest', 'mucus', 'wheezing'],
+        'influenza': ['fever', 'ache', 'tired', 'fatigue', 'cough', 'throat'],
+        'upper respiratory': ['cough', 'throat', 'sore throat', 'runny nose', 'congestion'],
+        'covid': ['fever', 'cough', 'loss of smell', 'loss of taste', 'tired', 'fatigue', 'throat']
+    }
+    
+    # Extract keywords from input
+    input_words = input_diagnosis.split()
+    
+    # Score diagnoses based on keyword relevance
+    scored_diagnoses = []
+    for diagnosis in diagnosis_list:
+        diagnosis_lower = diagnosis.lower()
+        base_score = 0
+        
+        # Check for direct keyword matches in diagnosis
+        for category, keywords in symptom_keywords.items():
+            if any(keyword in input_diagnosis for keyword in keywords):
+                if category in diagnosis_lower or any(kw in diagnosis_lower for kw in keywords):
+                    base_score += 20
+        
+        # Additional scoring for common medical terms
+        medical_matches = 0
+        if 'fever' in input_diagnosis and ('fever' in diagnosis_lower or 'viral' in diagnosis_lower or 'infection' in diagnosis_lower):
+            medical_matches += 15
+        if 'cough' in input_diagnosis and ('respiratory' in diagnosis_lower or 'pneumonia' in diagnosis_lower or 'bronch' in diagnosis_lower):
+            medical_matches += 15
+        if 'throat' in input_diagnosis and ('throat' in diagnosis_lower or 'upper respiratory' in diagnosis_lower):
+            medical_matches += 15
+        if 'smell' in input_diagnosis and ('viral' in diagnosis_lower or 'respiratory' in diagnosis_lower):
+            medical_matches += 10
+        if 'tired' in input_diagnosis or 'fatigue' in input_diagnosis:
+            if 'viral' in diagnosis_lower or 'infection' in diagnosis_lower:
+                medical_matches += 10
+        
+        base_score += medical_matches
+        
+        # Use fuzzy matching as additional factor
+        fuzzy_match = process.extractOne(input_diagnosis, [diagnosis_lower])
+        if fuzzy_match:
+            fuzzy_score = fuzzy_match[1]
+            # Combine scores: prioritize keyword matching but include fuzzy matching
+            combined_score = base_score + (fuzzy_score * 0.3)
+            scored_diagnoses.append((diagnosis, combined_score, fuzzy_score))
+    
+    # Sort by combined score
+    scored_diagnoses.sort(key=lambda x: x[1], reverse=True)
+    
+    if scored_diagnoses:
+        best_diagnosis, combined_score, fuzzy_score = scored_diagnoses[0]
+        
+        # Log the actual scores
+        logger.info(f"Best match: '{best_diagnosis}' with combined score {combined_score:.1f} (fuzzy: {fuzzy_score:.1f})")
+        
+        # Require a minimum combined score for acceptance
+        if combined_score >= 25:  # Adjusted threshold for keyword-based matching
+            return best_diagnosis
+        else:
+            # If no good keyword match, fall back to pure fuzzy matching with higher threshold
+            pure_fuzzy = process.extractOne(input_diagnosis, [d.lower() for d in diagnosis_list])
+            if pure_fuzzy and pure_fuzzy[1] >= 80:  # Higher threshold for pure fuzzy
+                original_index = [d.lower() for d in diagnosis_list].index(pure_fuzzy[0])
+                logger.info(f"Fallback fuzzy match: '{diagnosis_list[original_index]}' with score {pure_fuzzy[1]}")
+                return diagnosis_list[original_index]
+    
     return None
 
 
