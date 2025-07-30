@@ -6,3 +6,4 @@ rapidfuzz
 asyncio
 python-dotenv
 requests
+google-generativeai
