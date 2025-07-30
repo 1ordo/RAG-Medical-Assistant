@@ -2,7 +2,7 @@
 Medical Assistant AI - Streamlit Interface
 
 This module provides a Streamlit web interface for the Medical Assistant AI,
-allowing users to interact with Ollama Llama 3.2 for medical assistance and clustering-based analysis.
+allowing users to interact with Ollama Llama 3.2 or Google Gemini for medical assistance and clustering-based analysis.
 """
 
 import streamlit as st
@@ -10,7 +10,10 @@ import asyncio
 import logging
 import os
 import base64
-from ai_functions import ai_function, clear_all_chat_json
+from ai_functions import (
+    ai_function, clear_all_chat_json, get_ai_provider, get_available_providers, 
+    set_ai_provider, GEMINI_API_KEY, OLLAMA_BASE_URL
+)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -38,6 +41,16 @@ def init_session_state():
     """Initialize Streamlit session state variables"""
     if "messages" not in st.session_state:
         st.session_state.messages = []
+    if "selected_provider" not in st.session_state:
+        # Try to get available providers and set default
+        try:
+            available = get_available_providers()
+            if available:
+                st.session_state.selected_provider = available[0]
+            else:
+                st.session_state.selected_provider = "auto"
+        except:
+            st.session_state.selected_provider = "auto"
 
 
 def clear_chat_history():
@@ -72,7 +85,21 @@ def setup_ui():
         """, unsafe_allow_html=True)
     
     st.title("🏥 Medical Assistant AI")
-    st.markdown("### Powered by Ollama Llama 3.2 & Advanced Medical Clustering")
+    
+    # Show current AI provider with a more dynamic approach
+    try:
+        current_provider = get_ai_provider()
+        if current_provider == 'gemini':
+            st.markdown("### 🤖 Powered by Google Gemini & Advanced Medical Clustering")
+            st.success("🤖 Using Google Gemini for AI responses")
+        else:
+            st.markdown("### 🦙 Powered by Ollama Llama 3.2 & Advanced Medical Clustering")
+            st.success("🦙 Using Ollama for AI responses")
+    except Exception as e:
+        st.error(f"⚠️ AI Provider Configuration Issue: {str(e)}")
+        st.markdown("### ⚠️ Medical Assistant AI - Configuration Required")
+        st.info("💡 Use the sidebar to configure your AI provider")
+    
     st.markdown("Ask me about your symptoms, get medical insights, or analyze patient data!")
     
     # Add example queries
@@ -129,6 +156,118 @@ def display_sidebar():
     """Display the sidebar with information about available functions"""
     with st.sidebar:
         st.header("🏥 Medical Analysis Tools")
+        st.markdown("---")
+        
+        # AI Provider Switcher
+        st.subheader("🤖 AI Provider Selection")
+        
+        # Add refresh button to re-detect providers
+        col1, col2 = st.columns([3, 1])
+        with col2:
+            if st.button("🔄", help="Refresh available providers"):
+                # Clear session state to force re-detection
+                if "selected_provider" in st.session_state:
+                    del st.session_state.selected_provider
+                st.rerun()
+        
+        try:
+            available_providers = get_available_providers()
+            current_provider = get_ai_provider()
+            
+            if available_providers:
+                provider_options = []
+                provider_labels = {
+                    'ollama': '🦙 Ollama (Local)',
+                    'gemini': '🤖 Google Gemini (Cloud)'
+                }
+                
+                for provider in available_providers:
+                    provider_options.append(provider_labels.get(provider, provider))
+                
+                # Add auto option if multiple providers available
+                if len(available_providers) > 1:
+                    provider_options.insert(0, "🚀 Auto-detect")
+                    available_providers.insert(0, "auto")
+                
+                # Find current selection index
+                try:
+                    current_index = available_providers.index(st.session_state.selected_provider)
+                except (ValueError, KeyError):
+                    current_index = 0
+                
+                selected_label = st.selectbox(
+                    "Choose AI Provider:",
+                    provider_options,
+                    index=current_index,
+                    help="Select which AI model to use for responses"
+                )
+                
+                # Map back to provider name
+                selected_provider = available_providers[provider_options.index(selected_label)]
+                
+                # Update session state and AI functions if changed
+                if selected_provider != st.session_state.selected_provider:
+                    st.session_state.selected_provider = selected_provider
+                    set_ai_provider(selected_provider)
+                    st.rerun()
+                
+                # Set the provider for this session
+                set_ai_provider(selected_provider)
+                
+                # Show current status
+                if selected_provider == "auto":
+                    st.info(f"🔄 Currently using: {current_provider.title()}")
+                else:
+                    if selected_provider == current_provider:
+                        st.success(f"✅ Active: {current_provider.title()}")
+                    else:
+                        st.warning(f"⚠️ Selected {selected_provider} but using {current_provider}")
+                
+            else:
+                st.error("❌ No AI providers available")
+                st.markdown("""
+                **Setup Instructions:**
+                
+                **For Gemini:**
+                - Set `GEMINI_API_KEY` environment variable
+                
+                **For Ollama:**
+                - Install and start Ollama
+                - Run: `ollama pull llama3.2`
+                """)
+                
+        except Exception as e:
+            st.error(f"❌ Configuration Error: {str(e)}")
+            st.markdown("""
+            **Setup Instructions:**
+            
+            **For Gemini:**
+            - Set `GEMINI_API_KEY` environment variable
+            - Set `AI_PROVIDER=gemini` (optional)
+            
+            **For Ollama:**
+            - Install and start Ollama
+            - Run: `ollama pull llama3.2`
+            - Set `AI_PROVIDER=ollama` (optional)
+            """)
+        
+        st.markdown("---")
+        
+        # Provider Info
+        st.subheader("📊 Provider Information")
+        if GEMINI_API_KEY:
+            st.info("🔑 Gemini API configured")
+        else:
+            st.warning("⚠️ Gemini API not configured")
+        
+        try:
+            import requests
+            health_response = requests.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=3)
+            health_response.raise_for_status()
+            st.info("🦙 Ollama server running")
+        except:
+            st.warning("⚠️ Ollama server not running")
+        
         st.markdown("---")
         
         for fname, finfo in AVAILABLE_FUNCTIONS.items():
