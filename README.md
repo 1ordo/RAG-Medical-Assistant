@@ -172,7 +172,13 @@ For specific patient cases, the system uses K-means clustering to analyze hospit
 
 ## Dataset
 
-The clustering system uses a hospital inpatient discharge dataset that contains information about diagnoses, severity levels, costs, and medical department classifications. The dataset should be in CSV format with the following columns:
+The clustering system uses a hospital inpatient discharge dataset from New York State's SPARCS (Statewide Planning and Research Cooperative System) database. You can download the dataset from:
+
+**Download Link**: [Hospital Inpatient Discharges (SPARCS De-Identified) - 2012](https://health.data.ny.gov/Health/Hospital-Inpatient-Discharges-SPARCS-De-Identified/u4ud-w55t/about_data)
+
+After downloading, rename the file to `Hospital_Inpatient_Discharges.csv` and place it in the `data/` directory.
+
+The dataset contains information about diagnoses, severity levels, costs, and medical department classifications. The required columns for the clustering algorithm are:
 - CCS Diagnosis Description
 - APR Severity of Illness Description
 - APR MDC Description
