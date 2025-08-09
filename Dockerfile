@@ -15,9 +15,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY src/ ./src/
 COPY data/ ./data/
 
-# COPY the example if it exists
-# You can just attempt to copy it and ignore the error during build:
-COPY .env.example .env.example
+# Conditionally copy .env.example if it exists
+RUN if [ -f .env.example ]; then cp .env.example .env.example; fi
 
 # Then conditionally create .env if needed
 RUN if [ -f .env.example ]; then cp .env.example .env; \
